@@ -25,13 +25,17 @@ const ordersRouter = require('./routes/Order');
 const { User } = require('./model/User');
 const { isAuth, sanitizeUser, cookieExtractor } = require('./services/common');
 
+const path = require('path');
+const { Order } = require('./model/Order');
+
 // Webhook
 
 // TODO: we will capture actual order after deploying out server live on public URL
 
 const endpointSecret = process.env.ENDPOINT_SECRET;
 
-server.post('/webhook', express.raw({type: 'application/json'}), (request, response) => {
+server.post('/webhook', 
+express.raw({type: 'application/json'}), async (request, response) => {
   const sig = request.headers['stripe-signature'];
 
   let event;
@@ -47,9 +51,10 @@ server.post('/webhook', express.raw({type: 'application/json'}), (request, respo
   switch (event.type) {
     case 'payment_intent.succeeded':
       const paymentIntentSucceeded = event.data.object;
-      console.log({paymentIntentSucceeded})
-      // Then define and call a function to handle the event payment_intent.succeeded
-      break;
+      const order = await Order.findById(paymentIntentSucceeded.metadata.orderId);
+      order.paymentStatus = 'received';
+      await order.save()
+        break;
     // ... handle other event types
     default:
       console.log(`Unhandled event type ${event.type}`);
@@ -67,7 +72,7 @@ opts.jwtFromRequest = cookieExtractor;
 opts.secretOrKey = process.env.JWT_SECRET_KEY; // TODO: should not be in code;
 
 //middlewares
-server.use(express.static('build'))
+server.use(express.static(path.resolve(__dirname,'build')))
 server.use(cookieParser());
 
 server.use(session({
@@ -94,7 +99,8 @@ server.use('/users',isAuth(), usersRouter.router)
 server.use('/auth', authRouter.router)
 server.use('/cart',isAuth(), cartRouter.router)
 server.use('/orders',isAuth(), ordersRouter.router)
-
+// this line we add to make react router work in case of other routes doesnt match
+server.get('*', (req, res) => res.sendFile(path.resolve('build', 'index.html')));
 
 // Passport Strategies
 passport.use(
@@ -120,7 +126,7 @@ passport.use(
               return done(null, false, { message: 'invalid credentials' });
             }
             const token = jwt.sign(sanitizeUser(user), process.env.JWT_SECRET_KEY);
-            done(null, {id:user.id, role:user.role}); // this lines sends to serializer
+            done(null, {id:user.id, role:user.role, token}); // this lines sends to serializer
           }
         );
       } catch (err) {
@@ -150,7 +156,7 @@ passport.use(
 
 // this creates session variable req.user on being called from callbacks
 passport.serializeUser(function (user, cb) {
-    console.log('serialize', user);
+    // console.log('serialize', user);
     process.nextTick(function () {
       return cb(null, { id: user.id, role: user.role });
     });
@@ -159,7 +165,7 @@ passport.serializeUser(function (user, cb) {
   // this changes session variable req.user when called from authorized request
   
   passport.deserializeUser(function (user, cb) {
-    console.log('de-serialize', user);
+    // console.log('de-serialize', user);
     process.nextTick(function () {
       return cb(null, user);
     });
@@ -174,7 +180,7 @@ const stripe = require("stripe")(process.env.STRIPE_SERVER_KEY);
 
 
 server.post("/create-payment-intent", async (req, res) => {
-  const { totalAmount } = req.body;
+  const { totalAmount, orderId} = req.body;
 
   // Create a PaymentIntent with the order amount and currency
   const paymentIntent = await stripe.paymentIntents.create({
@@ -183,6 +189,9 @@ server.post("/create-payment-intent", async (req, res) => {
     automatic_payment_methods: {
       enabled: true,
     },
+    metadata:{
+      orderId
+    }
   });
 
   res.send({

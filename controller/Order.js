@@ -1,7 +1,7 @@
 const { Order } = require("../model/Order");
 
 exports.fetchOrdersByUser = async (req, res) => {
-    const { userId } = req.user;
+    const { id } = req.user;
     try {
       const orders = await Order.find({ user: id });
 
